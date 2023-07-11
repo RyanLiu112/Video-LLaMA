@@ -3,7 +3,6 @@ model:
   model_type: pretrain_vicuna
   freeze_vit: True
   freeze_qformer: True
-  
 
   # Q-Former
   num_query_token: 32
@@ -71,8 +70,8 @@ run:
   amp: True
   resume_ckpt_path: null
 
-  evaluate: False 
-  train_splits: ["train"]
+  evaluate: False
+  train_splits: [ "train" ]
 
   device: "cuda"
   world_size: 1

@@ -9,13 +9,15 @@ from video_llama.common.registry import registry
 from video_llama.models.blip2 import Blip2Base, disabled_train
 from video_llama.models.modeling_llama import LlamaForCausalLM
 # from video_llama.models.Qformer import BertEncoder
-from transformers import LlamaTokenizer,BertConfig
+from transformers import LlamaTokenizer, BertConfig
 # from transformers.models.bert.modeling_bert import BertEncoder
 import einops
 import copy
 from video_llama.models.Qformer import BertConfig, BertLMHeadModel
-from video_llama.models.ImageBind.models.imagebind_model import ImageBindModel,ModalityType
+from video_llama.models.ImageBind.models.imagebind_model import ImageBindModel, ModalityType
 from video_llama.models.ImageBind.models import imagebind_model
+
+
 # from flamingo_pytorch import PerceiverResampler
 @registry.register_model("video_llama")
 class VideoLLAMA(Blip2Base):
@@ -28,7 +30,7 @@ class VideoLLAMA(Blip2Base):
     }
 
     @classmethod
-    def init_video_Qformer(cls, num_query_token, vision_width,num_hidden_layers =2):
+    def init_video_Qformer(cls, num_query_token, vision_width, num_hidden_layers=2):
         encoder_config = BertConfig.from_pretrained("bert-base-uncased")
         encoder_config.num_hidden_layers = num_hidden_layers
         encoder_config.encoder_width = vision_width
@@ -65,14 +67,14 @@ class VideoLLAMA(Blip2Base):
         frozen_llama_proj=True,
         frozen_video_Qformer=True,
         frozen_audio_Qformer=True,
-        
+
         llama_proj_model='',
-        fusion_header_type= "seqTransf",
-        max_frame_pos= 32,
-        fusion_head_layers = 2,
-        num_video_query_token = 32,
-        num_audio_query_token = 8,
-        imagebind_ckpt_path = '/mnt/workspace/ckpt'
+        fusion_header_type="seqTransf",
+        max_frame_pos=32,
+        fusion_head_layers=2,
+        num_video_query_token=32,
+        num_audio_query_token=8,
+        imagebind_ckpt_path='/mnt/workspace/ckpt'
     ):
         super().__init__()
 
@@ -119,12 +121,12 @@ class VideoLLAMA(Blip2Base):
         logging.info('Loading LLAMA Tokenizer')
         self.llama_tokenizer = LlamaTokenizer.from_pretrained(llama_model, use_fast=False)
         if self.llama_tokenizer.pad_token is None:
-            self.llama_tokenizer.pad_token = self.llama_tokenizer.eos_token 
+            self.llama_tokenizer.pad_token = self.llama_tokenizer.eos_token
         DEFAULT_IMAGE_PATCH_TOKEN = '<ImageHere>'
         DEFAULT_AUDIO_PATCH_TOKEN = '<AudioHere>'
         self.llama_tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
         self.llama_tokenizer.add_tokens([DEFAULT_AUDIO_PATCH_TOKEN], special_tokens=True)
-        
+
         self.IMAGE_PATCH_TOKEN_ID = self.llama_tokenizer.get_vocab()[DEFAULT_IMAGE_PATCH_TOKEN]
         self.AUDIO_PATCH_TOKEN_ID = self.llama_tokenizer.get_vocab()[DEFAULT_AUDIO_PATCH_TOKEN]
 
@@ -145,7 +147,6 @@ class VideoLLAMA(Blip2Base):
         for name, param in self.llama_model.named_parameters():
             param.requires_grad = False
         logging.info('Loading LLAMA Done')
-
 
         logging.info('Loading LLAMA proj')
         self.llama_proj = nn.Linear(
@@ -184,8 +185,10 @@ class VideoLLAMA(Blip2Base):
         self.video_frame_position_embedding = nn.Embedding(max_frame_pos, self.Qformer.config.hidden_size)
 
         self.num_video_query_token = num_video_query_token
-        self.video_Qformer,self.video_query_tokens = self.init_video_Qformer(num_query_token = num_video_query_token,\
-            vision_width=self.Qformer.config.hidden_size, num_hidden_layers =2)
+        self.video_Qformer, self.video_query_tokens = self.init_video_Qformer(
+            num_query_token=num_video_query_token,
+            vision_width=self.Qformer.config.hidden_size, num_hidden_layers=2
+        )
 
         self.video_Qformer.cls = None
         self.video_Qformer.bert.embeddings.word_embeddings = None
@@ -194,7 +197,6 @@ class VideoLLAMA(Blip2Base):
             layer.output = None
             layer.intermediate = None
 
-
         if frozen_video_Qformer:
             #  todo frozen  llama_proj
             for name, param in self.video_Qformer.named_parameters():
@@ -202,7 +204,7 @@ class VideoLLAMA(Blip2Base):
             for name, param in self.video_frame_position_embedding.named_parameters():
                 param.requires_grad = False
             self.video_query_tokens.requires_grad = False
-            
+
             logging.info('video_Qformer is frozen')
         else:
             for name, param in self.video_Qformer.named_parameters():
@@ -212,19 +214,21 @@ class VideoLLAMA(Blip2Base):
             self.video_query_tokens.requires_grad = True
             logging.info('video_Qformer is not frozen')
 
-        print (f'Initializing audio encoder from {imagebind_ckpt_path} ...')
-        self.audio_encoder,self.audio_hidden_size = \
+        print(f'Initializing audio encoder from {imagebind_ckpt_path} ...')
+        self.audio_encoder, self.audio_hidden_size = \
             imagebind_model.imagebind_huge()
         self.audio_encoder.load_state_dict(torch.load("{}/imagebind_huge.pth".format(imagebind_ckpt_path)))
         # free vision encoder
         for name, param in self.audio_encoder.named_parameters():
             param.requires_grad = False
         self.audio_encoder.eval()
-        print ('audio encoder initialized.')
-        
+        print('audio encoder initialized.')
+
         self.num_audio_query_token = num_audio_query_token
-        self.audio_Qformer,self.audio_query_tokens = self.init_video_Qformer(num_query_token = self.num_audio_query_token,\
-            vision_width=self.audio_hidden_size, num_hidden_layers =2)
+        self.audio_Qformer, self.audio_query_tokens = self.init_video_Qformer(
+            num_query_token=self.num_audio_query_token, \
+            vision_width=self.audio_hidden_size, num_hidden_layers=2
+        )
         self.audio_Qformer.cls = None
         self.audio_Qformer.bert.embeddings.word_embeddings = None
         self.audio_Qformer.bert.embeddings.position_embeddings = None
@@ -237,12 +241,12 @@ class VideoLLAMA(Blip2Base):
         self.audio_position_embedding = nn.Embedding(8, self.audio_hidden_size)
 
         if frozen_video_Qformer and (not frozen_audio_Qformer):
-            self.train_flag = 1 # 只训练audio_Qformer
-        elif not(frozen_video_Qformer) and frozen_audio_Qformer:
-            self.train_flag = 0 # 训练video_Qformer
+            self.train_flag = 1  # 只训练audio_Qformer
+        elif not (frozen_video_Qformer) and frozen_audio_Qformer:
+            self.train_flag = 0  # 训练video_Qformer
         else:
-            self.train_flag = 2 # video_Qformer 
-            
+            self.train_flag = 2  # video_Qformer
+
         if frozen_audio_Qformer:
             #  todo frozen  llama_proj
             for name, param in self.audio_Qformer.named_parameters():
@@ -263,8 +267,8 @@ class VideoLLAMA(Blip2Base):
                 param.requires_grad = True
             logging.info('audio_Qformer is not frozen')
 
-
         #  self.audio_hidden_size
+
     def vit_to_cpu(self):
         self.ln_vision.to("cpu")
         self.ln_vision.float()
@@ -273,9 +277,9 @@ class VideoLLAMA(Blip2Base):
 
     def encode_videoQformer_visual(self, image):
         device = image.device
-        
+
         # input shape b,c,t,h,w
-        batch_size,_,time_length,_,_ = image.size()
+        batch_size, _, time_length, _, _ = image.size()
         image = einops.rearrange(image, 'b c t h w -> (b t) c h w')
         with self.maybe_autocast():
             # embed image features with blip2, out: (b t) q h
@@ -297,11 +301,11 @@ class VideoLLAMA(Blip2Base):
             q_hidden_state = query_output.last_hidden_state
 
             frame_position_embeddings = frame_position_embeddings.unsqueeze(-2)
-            frame_hidden_state = einops.rearrange(q_hidden_state, '(b t) q h -> b t q h',b=batch_size,t=time_length)
+            frame_hidden_state = einops.rearrange(q_hidden_state, '(b t) q h -> b t q h', b=batch_size, t=time_length)
             frame_hidden_state = frame_position_embeddings + frame_hidden_state
 
             # frame attention
-            frame_hidden_state =  einops.rearrange(frame_hidden_state, 'b t q h -> b (t q) h',b=batch_size,t=time_length)
+            frame_hidden_state = einops.rearrange(frame_hidden_state, 'b t q h -> b (t q) h', b=batch_size, t=time_length)
             frame_atts = torch.ones(frame_hidden_state.size()[:-1], dtype=torch.long).to(device)
             video_query_tokens = self.video_query_tokens.expand(frame_hidden_state.shape[0], -1, -1)
 
@@ -310,38 +314,39 @@ class VideoLLAMA(Blip2Base):
                 encoder_hidden_states=frame_hidden_state,
                 encoder_attention_mask=frame_atts,
                 return_dict=True,
-                )
+            )
             video_hidden = video_query_output.last_hidden_state
 
             inputs_llama = self.llama_proj(video_hidden)
             atts_llama = torch.ones(inputs_llama.size()[:-1], dtype=torch.long).to(image_embeds.device)
         return inputs_llama, atts_llama
-    
-    
+
     def prompt_wrap(self, img_embeds, atts_img, prompt):
         if prompt:
             batch_size = img_embeds.shape[0]
             # print(prompt)
             p_before, p_after = prompt.split('<ImageHere>')
             p_before_tokens = self.llama_tokenizer(
-                p_before, return_tensors="pt", add_special_tokens=False).to(img_embeds.device)
+                p_before, return_tensors="pt", add_special_tokens=False
+            ).to(img_embeds.device)
             p_after_tokens = self.llama_tokenizer(
-                p_after, return_tensors="pt", add_special_tokens=False).to(img_embeds.device)
+                p_after, return_tensors="pt", add_special_tokens=False
+            ).to(img_embeds.device)
             p_before_embeds = self.llama_model.model.embed_tokens(p_before_tokens.input_ids).expand(batch_size, -1, -1)
             p_after_embeds = self.llama_model.model.embed_tokens(p_after_tokens.input_ids).expand(batch_size, -1, -1)
             wrapped_img_embeds = torch.cat([p_before_embeds, img_embeds, p_after_embeds], dim=1)
             wrapped_atts_img = atts_img[:, :1].expand(-1, wrapped_img_embeds.shape[1])
-            
+
             return wrapped_img_embeds, wrapped_atts_img
         else:
             return img_embeds, atts_img
-    #  input audio shape [b t c h w] 
-    def encode_audioQformer(self, audio,modality_type=ModalityType.AUDIO):
+
+    #  input audio shape [b t c h w]
+    def encode_audioQformer(self, audio, modality_type=ModalityType.AUDIO):
         device = audio.device
         with self.maybe_autocast():
-            audio_feature, audio_imagebind_finalout = self.audio_encoder.get_audio_feature(audio,modality_type=modality_type)
-            batch_size,time_length = audio.size()[:2]
-
+            audio_feature, audio_imagebind_finalout = self.audio_encoder.get_audio_feature(audio, modality_type=modality_type)
+            batch_size, time_length = audio.size()[:2]
 
             position_ids = torch.arange(time_length, dtype=torch.long, device=device)
             position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
@@ -353,23 +358,23 @@ class VideoLLAMA(Blip2Base):
             frame_atts = torch.ones(audio_imagebind_finalout.size()[:-1], dtype=torch.long).to(device)
 
             audio_query_output = self.audio_Qformer.bert(
-                query_embeds=audio_query_tokens, #[32,768]
+                query_embeds=audio_query_tokens,  # [32,768]
                 encoder_hidden_states=audio_imagebind_finalout,
                 encoder_attention_mask=frame_atts,
                 return_dict=True,
-                )
+            )
             audio_hidden = audio_query_output.last_hidden_state
 
             inputs_llama = self.audio_llama_proj(audio_hidden)
             atts_llama = torch.ones(inputs_llama.size()[:-1], dtype=torch.long).to(device)
-    
+
         return inputs_llama, atts_llama
 
     def encode_videoQformer_audiovideo(self, image, audio):
         device = image.device
-        
+
         # input shape b,c,t,h,w
-        batch_size,_,time_length,_,_ = image.size()
+        batch_size, _, time_length, _, _ = image.size()
         image = einops.rearrange(image, 'b c t h w -> (b t) c h w')
         with self.maybe_autocast():
             # embed image features with blip2, out: (b t) q h
@@ -383,7 +388,7 @@ class VideoLLAMA(Blip2Base):
                 encoder_attention_mask=image_atts,
                 return_dict=True,
             )
-            
+
             # add frame_pos embedding
             position_ids = torch.arange(time_length, dtype=torch.long, device=query_tokens.device)
             position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
@@ -391,42 +396,43 @@ class VideoLLAMA(Blip2Base):
             q_hidden_state = query_output.last_hidden_state
 
             frame_position_embeddings = frame_position_embeddings.unsqueeze(-2)
-            frame_hidden_state = einops.rearrange(q_hidden_state, '(b t) q h -> b t q h',b=batch_size,t=time_length)
+            frame_hidden_state = einops.rearrange(q_hidden_state, '(b t) q h -> b t q h', b=batch_size, t=time_length)
             frame_hidden_state = frame_position_embeddings + frame_hidden_state
 
             # encode audio 
-            audio_feature, audio_imagebind_finalout = self.audio_encoder.get_audio_feature(audio,modality_type=ModalityType.AUDIO) # [batch,8*1,768]    8*32, 768
+            audio_feature, audio_imagebind_finalout = self.audio_encoder.get_audio_feature(
+                audio, modality_type=ModalityType.AUDIO
+            )  # [batch,8*1,768]    8*32, 768
             audio_frame_position_embeddings = frame_position_embeddings.squeeze(-2)
             audio_feature = audio_feature + audio_frame_position_embeddings
 
             # frame attention a
-            frame_hidden_state =  einops.rearrange(frame_hidden_state, 'b t q h -> b (t q) h',b=batch_size,t=time_length)
-            frame_hidden_state = torch.cat([frame_hidden_state,audio_feature],dim = 1)
+            frame_hidden_state = einops.rearrange(frame_hidden_state, 'b t q h -> b (t q) h', b=batch_size, t=time_length)
+            frame_hidden_state = torch.cat([frame_hidden_state, audio_feature], dim=1)
             video_query_tokens = self.video_query_tokens.expand(frame_hidden_state.shape[0], -1, -1)
             frame_atts = torch.ones(frame_hidden_state.size()[:-1], dtype=torch.long).to(device)
 
             video_query_output = self.video_Qformer.bert(
-                query_embeds=video_query_tokens, #[32,768]
+                query_embeds=video_query_tokens,  # [32,768]
                 encoder_hidden_states=frame_hidden_state,
                 encoder_attention_mask=frame_atts,
                 return_dict=True,
-                )
+            )
             video_hidden = video_query_output.last_hidden_state
 
             inputs_llama = self.llama_proj(video_hidden)
             atts_llama = torch.ones(inputs_llama.size()[:-1], dtype=torch.long).to(image_embeds.device)
-    
+
         return inputs_llama, atts_llama
 
     def forward(self, samples):
-        if 'conv_type' in samples.keys() and samples['conv_type']=='multi':
-            
+        if 'conv_type' in samples.keys() and samples['conv_type'] == 'multi':
             im_patch_token_id = self.IMAGE_PATCH_TOKEN_ID
             image = samples["images"]
             input_ids = samples['input_ids']
-            if len(image.size())==4:
+            if len(image.size()) == 4:
                 time = 1
-                image = einops.repeat(image, 'b c h w -> b c t h w',t = time)
+                image = einops.repeat(image, 'b c h w -> b c t h w', t=time)
 
             if self.train_flag == 0:
                 num_patch_tokens = self.num_video_query_token
@@ -435,27 +441,31 @@ class VideoLLAMA(Blip2Base):
                 num_patch_tokens = self.num_audio_query_token
                 image = einops.rearrange(image, 'b c t h w -> b t c h w')
                 img_embeds, atts_img = self.encode_audioQformer(image, modality_type=ModalityType.VISION)
-                
+
             temp_input_ids = copy.deepcopy(input_ids)
             temp_input_ids[temp_input_ids == im_patch_token_id] = 0
             temp_input_embedding = self.llama_model.model.embed_tokens(temp_input_ids)
 
-            new_input_embeds=[]
+            new_input_embeds = []
             cur_image_idx = 0
             for cur_input_ids, cur_input_embeds in zip(input_ids, temp_input_embedding):
                 cur_image_features = img_embeds[cur_image_idx]
 
                 if (cur_input_ids == im_patch_token_id).sum() != num_patch_tokens:
-                        raise ValueError("The number of image patch tokens should be the same as the number of image patches.")
+                    raise ValueError("The number of image patch tokens should be the same as the number of image patches.")
                 masked_indices = torch.where(cur_input_ids == im_patch_token_id)[0]
                 mask_index_start = masked_indices[0]
-                if (masked_indices != torch.arange(mask_index_start, mask_index_start+num_patch_tokens, device=masked_indices.device, dtype=masked_indices.dtype)).any():
+                if (masked_indices != torch.arange(
+                    mask_index_start, mask_index_start + num_patch_tokens, device=masked_indices.device, dtype=masked_indices.dtype
+                )).any():
                     raise ValueError("The image patch tokens should be consecutive.")
-                
-                cur_new_input_embeds = torch.cat((cur_input_embeds[:mask_index_start], cur_image_features, cur_input_embeds[mask_index_start+num_patch_tokens:]), dim=0)
+
+                cur_new_input_embeds = torch.cat(
+                    (cur_input_embeds[:mask_index_start], cur_image_features, cur_input_embeds[mask_index_start + num_patch_tokens:]), dim=0
+                )
                 new_input_embeds.append(cur_new_input_embeds)
-                
-                cur_image_idx+=1
+
+                cur_image_idx += 1
             inputs_embeds = torch.stack(new_input_embeds, dim=0)
             targets = samples['labels']
             attention_mask = samples['attention_mask']
@@ -473,8 +483,8 @@ class VideoLLAMA(Blip2Base):
 
             if len(image.size()) != 5:
                 time = 1
-                image = einops.repeat(image, 'b c h w -> b c t h w',t = time)
-            
+                image = einops.repeat(image, 'b c h w -> b c t h w', t=time)
+
             if self.train_flag == 1:
                 image = einops.rearrange(image, 'b c t h w -> b t c h w')
                 img_embeds, atts_img = self.encode_audioQformer(image, modality_type=ModalityType.VISION)
@@ -484,7 +494,6 @@ class VideoLLAMA(Blip2Base):
             if self.prompt_list:
                 prompt = random.choice(self.prompt_list)
                 img_embeds, atts_img = self.prompt_wrap(img_embeds, atts_img, prompt)
-                
 
             self.llama_tokenizer.padding_side = "right"
 
@@ -504,15 +513,19 @@ class VideoLLAMA(Blip2Base):
             )
 
             empty_targets = (
-                torch.ones([atts_img.shape[0], atts_img.shape[1]+1],
-                        dtype=torch.long).to(image.device).fill_(-100)  # plus one for bos
+                torch.ones(
+                    [atts_img.shape[0], atts_img.shape[1] + 1],
+                    dtype=torch.long
+                ).to(image.device).fill_(-100)  # plus one for bos
             )
             targets = torch.cat([empty_targets, targets], dim=1)
 
             batch_size = img_embeds.shape[0]
-            bos = torch.ones([batch_size, 1],
-                            dtype=to_regress_tokens.input_ids.dtype,
-                            device=to_regress_tokens.input_ids.device) * self.llama_tokenizer.bos_token_id
+            bos = torch.ones(
+                [batch_size, 1],
+                dtype=to_regress_tokens.input_ids.dtype,
+                device=to_regress_tokens.input_ids.device
+            ) * self.llama_tokenizer.bos_token_id
             bos_embeds = self.llama_model.model.embed_tokens(bos)
             atts_bos = atts_img[:, :1]
 
@@ -534,7 +547,10 @@ class VideoLLAMA(Blip2Base):
     @classmethod
     def from_config(cls, cfg):
         vit_model = cfg.get("vit_model", "eva_clip_g")
-        q_former_model = cfg.get("q_former_model", "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth")
+        q_former_model = cfg.get(
+            "q_former_model",
+            "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
+        )
         img_size = cfg.get("image_size")
         num_query_token = cfg.get("num_query_token")
         llama_model = cfg.get("llama_model")
@@ -551,7 +567,7 @@ class VideoLLAMA(Blip2Base):
         prompt_template = cfg.get("prompt_template", "")
         max_txt_len = cfg.get("max_txt_len", 32)
         end_sym = cfg.get("end_sym", '\n')
-        
+
         frozen_llama_proj = cfg.get("frozen_llama_proj", True)
         frozen_video_Qformer = cfg.get("frozen_video_Qformer", True)
         frozen_audio_Qformer = cfg.get("frozen_audio_Qformer", True)
@@ -561,8 +577,8 @@ class VideoLLAMA(Blip2Base):
         fusion_header_type = cfg.get("fusion_header_type", 'seqTransf')
         max_frame_pos = cfg.get("max_frame_pos", 32)
         fusion_head_layers = cfg.get("fusion_head_layers", 2)
-        num_video_query_token =  cfg.get("num_video_query_token", 32)
-        num_audio_query_token =  cfg.get("num_audio_query_token", 8)
+        num_video_query_token = cfg.get("num_video_query_token", 32)
+        num_audio_query_token = cfg.get("num_audio_query_token", 8)
         imagebind_ckpt_path = cfg.get("imagebind_ckpt_path", 8)
         model = cls(
             vit_model=vit_model,
@@ -588,8 +604,8 @@ class VideoLLAMA(Blip2Base):
             frozen_video_Qformer=frozen_video_Qformer,
             frozen_audio_Qformer=frozen_audio_Qformer,
             num_video_query_token=num_video_query_token,
-            num_audio_query_token = num_audio_query_token,
-            imagebind_ckpt_path = imagebind_ckpt_path,
+            num_audio_query_token=num_audio_query_token,
+            imagebind_ckpt_path=imagebind_ckpt_path,
         )
 
         ckpt_path = cfg.get("ckpt", "")  # load weights of MiniGPT-4
@@ -597,7 +613,7 @@ class VideoLLAMA(Blip2Base):
             print("Load first Checkpoint: {}".format(ckpt_path))
             ckpt = torch.load(ckpt_path, map_location="cpu")
             msg = model.load_state_dict(ckpt['model'], strict=False)
-        ckpt_path_2 = cfg.get("ckpt_2", "")  
+        ckpt_path_2 = cfg.get("ckpt_2", "")
         if ckpt_path_2:
             print("Load second Checkpoint: {}".format(ckpt_path_2))
             ckpt = torch.load(ckpt_path_2, map_location="cpu")

@@ -4,7 +4,6 @@ model:
   freeze_vit: True
   freeze_qformer: True
 
-
   # Q-Former
   num_query_token: 32
 
@@ -25,7 +24,7 @@ model:
   prompt_template: '###Human: {} ###Assistant: '
   ckpt: 'path/pretrained_ckpt'
 
-  
+
 
 datasets:
   cc_sbu_align:
@@ -39,7 +38,7 @@ datasets:
       text_processor:
         train:
           name: "blip_caption"
-      
+
   llava_instruct:
     data_type: images
     build_info:
@@ -54,7 +53,7 @@ datasets:
         name: "blip_caption"
     num_video_query_token: 32
     tokenizer_name: "ckpt/vicuna-13b/"
-    
+
   webvid_instruct:
     data_type: video
     build_info:
@@ -93,8 +92,8 @@ run:
   amp: True
   resume_ckpt_path: null
 
-  evaluate: False 
-  train_splits: ["train"]
+  evaluate: False
+  train_splits: [ "train" ]
 
   device: "cuda"
   world_size: 1

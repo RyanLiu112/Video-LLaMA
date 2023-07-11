@@ -16,7 +16,6 @@ from video_llama.models.blip2 import Blip2Base
 from video_llama.models.video_llama import VideoLLAMA
 from video_llama.processors.base_processor import BaseProcessor
 
-
 __all__ = [
     "load_model",
     "BaseModel",

@@ -122,7 +122,7 @@ def compute_sim_matrix(model, data_loader, **kwargs):
     text_embeds = []
     text_atts = []
     for i in range(0, num_text, text_bs):
-        text = texts[i : min(num_text, i + text_bs)]
+        text = texts[i: min(num_text, i + text_bs)]
         text_input = model.tokenizer(
             text,
             padding="max_length",
