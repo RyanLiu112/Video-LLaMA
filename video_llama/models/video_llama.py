@@ -27,6 +27,7 @@ class VideoLLAMA(Blip2Base):
 
     PRETRAINED_MODEL_CONFIG_DICT = {
         "pretrain_vicuna": "configs/models/video_llama.yaml",
+        "pretrain_llama_v2": "configs/models/video_llama.yaml",
     }
 
     @classmethod
@@ -74,7 +75,8 @@ class VideoLLAMA(Blip2Base):
         fusion_head_layers=2,
         num_video_query_token=32,
         num_audio_query_token=8,
-        imagebind_ckpt_path='/mnt/workspace/ckpt'
+        imagebind_ckpt_path='/mnt/workspace/ckpt',
+        equip_audio_branch=True
     ):
         super().__init__()
 
@@ -121,7 +123,7 @@ class VideoLLAMA(Blip2Base):
         logging.info('Loading LLAMA Tokenizer')
         self.llama_tokenizer = LlamaTokenizer.from_pretrained(llama_model, use_fast=False)
         if self.llama_tokenizer.pad_token is None:
-            self.llama_tokenizer.pad_token = self.llama_tokenizer.eos_token
+            self.llama_tokenizer.pad_token = self.llama_tokenizer.unk_token
         DEFAULT_IMAGE_PATCH_TOKEN = '<ImageHere>'
         DEFAULT_AUDIO_PATCH_TOKEN = '<AudioHere>'
         self.llama_tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
@@ -134,14 +136,14 @@ class VideoLLAMA(Blip2Base):
         if self.low_resource:
             self.llama_model = LlamaForCausalLM.from_pretrained(
                 llama_model,
-                torch_dtype=torch.float16,
+                torch_dtype=torch.bfloat16,
                 load_in_8bit=True,
                 device_map={'': device_8bit}
             )
         else:
             self.llama_model = LlamaForCausalLM.from_pretrained(
                 llama_model,
-                torch_dtype=torch.float16,
+                torch_dtype=torch.bfloat16,
             )
 
         for name, param in self.llama_model.named_parameters():
@@ -214,58 +216,59 @@ class VideoLLAMA(Blip2Base):
             self.video_query_tokens.requires_grad = True
             logging.info('video_Qformer is not frozen')
 
-        print(f'Initializing audio encoder from {imagebind_ckpt_path} ...')
-        self.audio_encoder, self.audio_hidden_size = \
-            imagebind_model.imagebind_huge()
-        self.audio_encoder.load_state_dict(torch.load("{}/imagebind_huge.pth".format(imagebind_ckpt_path)))
-        # free vision encoder
-        for name, param in self.audio_encoder.named_parameters():
-            param.requires_grad = False
-        self.audio_encoder.eval()
-        print('audio encoder initialized.')
-
-        self.num_audio_query_token = num_audio_query_token
-        self.audio_Qformer, self.audio_query_tokens = self.init_video_Qformer(
-            num_query_token=self.num_audio_query_token, \
-            vision_width=self.audio_hidden_size, num_hidden_layers=2
-        )
-        self.audio_Qformer.cls = None
-        self.audio_Qformer.bert.embeddings.word_embeddings = None
-        self.audio_Qformer.bert.embeddings.position_embeddings = None
-        for layer in self.audio_Qformer.bert.encoder.layer:
-            layer.output = None
-            layer.intermediate = None
-        self.audio_llama_proj = nn.Linear(
-            self.audio_Qformer.config.hidden_size, self.llama_model.config.hidden_size
-        )
-        self.audio_position_embedding = nn.Embedding(8, self.audio_hidden_size)
-
         if frozen_video_Qformer and (not frozen_audio_Qformer):
-            self.train_flag = 1  # 只训练audio_Qformer
-        elif not (frozen_video_Qformer) and frozen_audio_Qformer:
-            self.train_flag = 0  # 训练video_Qformer
+            self.train_flag = 1 # 只训练audio_Qformer
+        elif not(frozen_video_Qformer) and frozen_audio_Qformer:
+            self.train_flag = 0 # 训练video_Qformer
+        elif not(frozen_video_Qformer) and not(frozen_audio_Qformer):
+            self.train_flag = 2 # video_Qformer and AL trained
         else:
-            self.train_flag = 2  # video_Qformer
+            self.train_flag = 3
 
-        if frozen_audio_Qformer:
-            #  todo frozen  llama_proj
-            for name, param in self.audio_Qformer.named_parameters():
+        if equip_audio_branch:
+            print (f'Initializing audio encoder from {imagebind_ckpt_path} ...')
+            self.audio_encoder,self.audio_hidden_size = \
+                imagebind_model.imagebind_huge()
+            self.audio_encoder.load_state_dict(torch.load("{}/imagebind_huge.pth".format(imagebind_ckpt_path)))
+            # free vision encoder
+            for name, param in self.audio_encoder.named_parameters():
                 param.requires_grad = False
-            self.audio_query_tokens.requires_grad = False
-            for name, param in self.audio_llama_proj.named_parameters():
-                param.requires_grad = False
-            for name, param in self.audio_position_embedding.named_parameters():
-                param.requires_grad = False
-            logging.info('audio_Qformer and audio-LLAMA proj is frozen')
-        else:
-            for name, param in self.audio_Qformer.named_parameters():
-                param.requires_grad = True
-            self.audio_query_tokens.requires_grad = True
-            for name, param in self.audio_llama_proj.named_parameters():
-                param.requires_grad = True
-            for name, param in self.audio_position_embedding.named_parameters():
-                param.requires_grad = True
-            logging.info('audio_Qformer is not frozen')
+            self.audio_encoder.eval()
+            print ('audio encoder initialized.')
+            
+            self.num_audio_query_token = num_audio_query_token
+            self.audio_Qformer,self.audio_query_tokens = self.init_video_Qformer(num_query_token = self.num_audio_query_token,\
+                vision_width=self.audio_hidden_size, num_hidden_layers =2)
+            self.audio_Qformer.cls = None
+            self.audio_Qformer.bert.embeddings.word_embeddings = None
+            self.audio_Qformer.bert.embeddings.position_embeddings = None
+            for layer in self.audio_Qformer.bert.encoder.layer:
+                layer.output = None
+                layer.intermediate = None
+            self.audio_llama_proj = nn.Linear(
+                self.audio_Qformer.config.hidden_size, self.llama_model.config.hidden_size
+            )
+            self.audio_position_embedding = nn.Embedding(8, self.audio_hidden_size)
+
+            if frozen_audio_Qformer:
+                #  todo frozen  llama_proj
+                for name, param in self.audio_Qformer.named_parameters():
+                    param.requires_grad = False
+                self.audio_query_tokens.requires_grad = False
+                for name, param in self.audio_llama_proj.named_parameters():
+                    param.requires_grad = False
+                for name, param in self.audio_position_embedding.named_parameters():
+                    param.requires_grad = False
+                logging.info('audio_Qformer and audio-LLAMA proj is frozen')
+            else:
+                for name, param in self.audio_Qformer.named_parameters():
+                    param.requires_grad = True
+                self.audio_query_tokens.requires_grad = True
+                for name, param in self.audio_llama_proj.named_parameters():
+                    param.requires_grad = True
+                for name, param in self.audio_position_embedding.named_parameters():
+                    param.requires_grad = True
+                logging.info('audio_Qformer is not frozen')
 
         #  self.audio_hidden_size
 
@@ -573,13 +576,15 @@ class VideoLLAMA(Blip2Base):
         frozen_audio_Qformer = cfg.get("frozen_audio_Qformer", True)
 
         llama_proj_model = cfg.get("llama_proj_model", '')
-
+        
         fusion_header_type = cfg.get("fusion_header_type", 'seqTransf')
         max_frame_pos = cfg.get("max_frame_pos", 32)
         fusion_head_layers = cfg.get("fusion_head_layers", 2)
-        num_video_query_token = cfg.get("num_video_query_token", 32)
+        num_video_query_token =  cfg.get("num_video_query_token", 32)
+
+        equip_audio_branch= cfg.get("equip_audio_branch", True)
         num_audio_query_token = cfg.get("num_audio_query_token", 8)
-        imagebind_ckpt_path = cfg.get("imagebind_ckpt_path", 8)
+        imagebind_ckpt_path = cfg.get("imagebind_ckpt_path", '/mnt/workspace/ckpt')
         model = cls(
             vit_model=vit_model,
             q_former_model=q_former_model,
@@ -606,6 +611,7 @@ class VideoLLAMA(Blip2Base):
             num_video_query_token=num_video_query_token,
             num_audio_query_token=num_audio_query_token,
             imagebind_ckpt_path=imagebind_ckpt_path,
+            equip_audio_branch=equip_audio_branch
         )
 
         ckpt_path = cfg.get("ckpt", "")  # load weights of MiniGPT-4
